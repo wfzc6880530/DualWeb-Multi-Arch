@@ -1,0 +1,67 @@
+name: DualWeb version/architecture CI
+
+on:
+  push:
+    branches: ['v24.10', 'v25.12']
+  workflow_dispatch:
+    inputs:
+      firmware:
+        description: 'Firmware version branch to test'
+        required: true
+        type: choice
+        options: ['v24.10', 'v25.12']
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: ${{ github.ref_name }} / ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    env:
+      DUALWEB_REPO_URL: ${{ vars.DUALWEB_REPO_URL || 'https://github.com/wfzc6880530/dualweb.git' }}
+      DUALWEB_REF: ${{ vars.DUALWEB_REF || 'test/openbox-artifacts' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y git file binutils tar gzip
+      - name: Checkout upstream source
+        run: git clone --depth=1 --branch "$DUALWEB_REF" "$DUALWEB_REPO_URL" upstream
+      - name: Compile and inspect
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f upstream/src/main.go
+          case "${{ matrix.arch }}" in
+            x86_64) GOARCH=amd64 ;;
+            aarch64) GOARCH=arm64 ;;
+          esac
+          mkdir -p dist/root/usr/sbin dist/root/usr/bin dist/root/etc/init.d dist/root/etc/nginx/conf.d
+          (
+            cd upstream
+            CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -trimpath -ldflags='-s -w' -o ../dist/root/usr/sbin/dualweb-api ./src/main.go
+          )
+          file dist/root/usr/sbin/dualweb-api
+          test -s dist/root/usr/sbin/dualweb-api
+          grep -q '@@DUALWEB_PORT@@' web/dualweb-nginx.conf
+          install -m 0755 files/dualweb-api.init dist/root/etc/init.d/dualweb-api
+          install -m 0755 files/dualweb-port dist/root/usr/bin/dualweb-port
+          install -m 0644 web/dualweb-nginx.conf dist/root/etc/nginx/conf.d/dualweb-port.conf
+          tar -czf "dist/dualweb-${GITHUB_REF_NAME}-${{ matrix.arch }}-bundle.tar.gz" -C dist/root .
+          sha256sum "dist/dualweb-${GITHUB_REF_NAME}-${{ matrix.arch }}-bundle.tar.gz" > "dist/dualweb-${GITHUB_REF_NAME}-${{ matrix.arch }}-bundle.tar.gz.sha256"
+      - name: Upload compile-test bundle (not a firmware package)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dualweb-${{ github.ref_name }}-${{ matrix.arch }}-compile-test
+          path: |
+            dist/dualweb-*.tar.gz
+            dist/dualweb-*.sha256
+          if-no-files-found: error
+          retention-days: 14
