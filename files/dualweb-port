@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+CONF=/etc/nginx/conf.d/dualweb-port.conf
+case "${1:-}" in
+  ''|*[!0-9]*) echo "Usage: dualweb-port PORT (1024-65535)" >&2; exit 2 ;;
+esac
+PORT="$1"
+[ "$PORT" -ge 1024 ] && [ "$PORT" -le 65535 ] || { echo "Port must be 1024-65535" >&2; exit 2; }
+[ -f "$CONF" ] || { echo "Missing $CONF" >&2; exit 1; }
+TMP="${CONF}.tmp.$$"
+sed "s/@@DUALWEB_PORT@@/$PORT/g" "$CONF" > "$TMP"
+cp "$TMP" "$CONF"
+rm -f "$TMP"
+nginx -t
+/etc/init.d/nginx reload
+echo "DualWeb port set to $PORT"
